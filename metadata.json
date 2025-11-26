@@ -1,0 +1,7 @@
+{
+  "name": "RajMusic",
+  "description": "A premium, free-to-use mobile music streaming application with high-quality audio, equalizer, lyrics, and AI-powered recommendations.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
