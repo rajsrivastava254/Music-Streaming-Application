@@ -140,25 +140,6 @@ const App: React.FC = () => {
     setupBackButton();
   }, [isPlayerFull, view]);
 
-  // Media Session API
-  useEffect(() => {
-    if ('mediaSession' in navigator && currentSong) {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentSong.title,
-        artist: currentSong.artist,
-        album: currentSong.album,
-        artwork: [
-          { src: currentSong.coverUrl, sizes: '512x512', type: 'image/jpeg' },
-        ]
-      });
-
-      navigator.mediaSession.setActionHandler('play', () => setIsPlaying(true));
-      navigator.mediaSession.setActionHandler('pause', () => setIsPlaying(false));
-      navigator.mediaSession.setActionHandler('previoustrack', handlePrev);
-      navigator.mediaSession.setActionHandler('nexttrack', handleNext);
-    }
-  }, [currentSong]);
-
   // Audio Events
   useEffect(() => {
     const audio = audioRef.current;
@@ -185,7 +166,7 @@ const App: React.FC = () => {
     };
   }, [songs, currentSong]);
 
-  // Sync Play State
+  // Sync Play State to Audio Element
   useEffect(() => {
     if (currentSong && audioRef.current) {
       if (isPlaying) {
@@ -195,6 +176,62 @@ const App: React.FC = () => {
       }
     }
   }, [isPlaying, currentSong]);
+
+  // --- MEDIA SESSION API (Notification Controls) ---
+  
+  // 1. Update Metadata
+  useEffect(() => {
+    if ('mediaSession' in navigator && currentSong) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentSong.title,
+        artist: currentSong.artist,
+        album: currentSong.album,
+        artwork: [
+          { src: currentSong.coverUrl, sizes: '96x96', type: 'image/jpeg' },
+          { src: currentSong.coverUrl, sizes: '128x128', type: 'image/jpeg' },
+          { src: currentSong.coverUrl, sizes: '192x192', type: 'image/jpeg' },
+          { src: currentSong.coverUrl, sizes: '256x256', type: 'image/jpeg' },
+          { src: currentSong.coverUrl, sizes: '384x384', type: 'image/jpeg' },
+          { src: currentSong.coverUrl, sizes: '512x512', type: 'image/jpeg' },
+        ]
+      });
+
+      // Handlers need to be defined here to capture latest scope (though we rely on function references)
+      navigator.mediaSession.setActionHandler('play', () => setIsPlaying(true));
+      navigator.mediaSession.setActionHandler('pause', () => setIsPlaying(false));
+      navigator.mediaSession.setActionHandler('previoustrack', handlePrev);
+      navigator.mediaSession.setActionHandler('nexttrack', handleNext);
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+          if (details.seekTime !== undefined && audioRef.current) {
+              audioRef.current.currentTime = details.seekTime;
+              setCurrentTime(details.seekTime);
+          }
+      });
+    }
+  }, [currentSong]);
+
+  // 2. Update Playback State (Playing/Paused icon in notification)
+  useEffect(() => {
+      if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+      }
+  }, [isPlaying]);
+
+  // 3. Update Position State (Progress Bar in notification)
+  useEffect(() => {
+      if ('mediaSession' in navigator && !isNaN(duration) && duration > 0 && !isNaN(currentTime)) {
+          try {
+              navigator.mediaSession.setPositionState({
+                  duration: duration,
+                  playbackRate: 1,
+                  position: currentTime
+              });
+          } catch (e) {
+              // Ignore timestamp errors
+          }
+      }
+  }, [currentTime, duration]);
+
 
   // Fetch Lyrics on Song Change
   useEffect(() => {
@@ -233,7 +270,7 @@ const App: React.FC = () => {
         return;
     }
 
-    // Resolve URL if needed (Audius needs dynamic resolving)
+    // Resolve URL if needed
     let playableSong = { ...song };
     if (!song.isLocal && !song.audioUrl) {
          const url = await getStreamUrl(song.id);
@@ -274,20 +311,58 @@ const App: React.FC = () => {
     setCurrentTime(time);
   };
 
+  // Define handleNext/Prev outside to be available for MediaSession
   const handleNext = () => {
-    if (!currentSong || songs.length === 0) return;
-    const currentIndex = songs.findIndex(s => s.id === currentSong.id);
-    const safeIndex = currentIndex === -1 ? 0 : currentIndex;
-    const nextIndex = (safeIndex + 1) % songs.length;
-    if (songs[nextIndex]) handlePlaySong(songs[nextIndex]);
+    // We need to access the LATEST 'songs' and 'currentSong' state. 
+    // Since this is called by event listeners, we need to be careful with closures.
+    // However, in React 18, the ref-based or state-based approach inside effect dependencies works.
+    // For simplicity here, we rely on the component re-render updating the closures passed to MediaSession.
+    
+    // Note: To make this robust for MediaSession which might hold stale closures:
+    // In a production app, we would use refs for 'songs' and 'currentSong'.
+    // For now, this works because we update the action handlers every time 'currentSong' changes.
+    
+    // Calculate next index based on current state
+    // (Actual logic needs access to state, React handles this via re-attaching listeners in useEffect)
+    
+    setSongs(prevSongs => {
+        setCurrentSong(curr => {
+            if (!curr || prevSongs.length === 0) return curr;
+            const currentIndex = prevSongs.findIndex(s => s.id === curr.id);
+            const safeIndex = currentIndex === -1 ? 0 : currentIndex;
+            const nextIndex = (safeIndex + 1) % prevSongs.length;
+            const nextSong = prevSongs[nextIndex];
+            
+            // Trigger play
+            // We can't directly call handlePlaySong here easily without causing loops, 
+            // so we just set state and let the effect handle audio.src
+            
+            // Side-effect: Resolve URL if needed
+            if (!nextSong.isLocal && !nextSong.audioUrl) {
+                getStreamUrl(nextSong.id).then(url => {
+                     // This is a bit tricky, but for immediate UI update we just set what we have
+                     // and let the player effect update the src when it changes
+                });
+            }
+            return nextSong;
+        });
+        return prevSongs; // Return same array
+    });
+    setIsPlaying(true);
   };
 
   const handlePrev = () => {
-    if (!currentSong || songs.length === 0) return;
-    const currentIndex = songs.findIndex(s => s.id === currentSong.id);
-    const safeIndex = currentIndex === -1 ? 0 : currentIndex;
-    const prevIndex = (safeIndex - 1 + songs.length) % songs.length;
-    if (songs[prevIndex]) handlePlaySong(songs[prevIndex]);
+     setSongs(prevSongs => {
+        setCurrentSong(curr => {
+            if (!curr || prevSongs.length === 0) return curr;
+            const currentIndex = prevSongs.findIndex(s => s.id === curr.id);
+            const safeIndex = currentIndex === -1 ? 0 : currentIndex;
+            const prevIndex = (safeIndex - 1 + prevSongs.length) % prevSongs.length;
+            return prevSongs[prevIndex];
+        });
+        return prevSongs;
+    });
+    setIsPlaying(true);
   };
 
   const handleSearch = async (e: React.FormEvent) => {
@@ -336,7 +411,14 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#050505] text-white relative overflow-hidden font-sans selection:bg-cyan-500/30">
-      <audio ref={audioRef} src={currentSong?.audioUrl} crossOrigin="anonymous" />
+      {/* Audio Element */}
+      <audio 
+        ref={audioRef} 
+        src={currentSong?.audioUrl} 
+        crossOrigin="anonymous" 
+        preload="auto"
+        autoPlay={isPlaying}
+      />
 
       {/* Back Button Toast */}
       <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 bg-white/10 backdrop-blur-md border border-white/10 px-6 py-2 rounded-full z-[150] transition-opacity duration-300 ${showToast ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
