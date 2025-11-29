@@ -150,7 +150,9 @@ const App: React.FC = () => {
     const onEnded = () => handleNext();
     const onError = (e: any) => {
         console.log("Audio Error, trying next", e);
-        if (isPlaying) handleNext();
+        if (isPlaying) { 
+            setTimeout(() => handleNext(), 1000); 
+        }
     };
 
     audio.addEventListener('timeupdate', onTimeUpdate);
@@ -166,22 +168,35 @@ const App: React.FC = () => {
     };
   }, [songs, currentSong]);
 
+  // Auto-Resolve Audio URL
+  useEffect(() => {
+      if (currentSong && !currentSong.isLocal && !currentSong.audioUrl) {
+          let cancelled = false;
+          getStreamUrl(currentSong.id).then(url => {
+              if (cancelled) return;
+              setCurrentSong(prev => prev && prev.id === currentSong.id ? { ...prev, audioUrl: url } : prev);
+          });
+          return () => { cancelled = true; };
+      }
+  }, [currentSong]);
+
   // Sync Play State to Audio Element
   useEffect(() => {
-    if (currentSong && audioRef.current) {
+    if (currentSong && audioRef.current && currentSong.audioUrl) {
       if (isPlaying) {
         audioRef.current.play().catch(e => console.warn("Autoplay blocked", e));
       } else {
         audioRef.current.pause();
       }
     }
-  }, [isPlaying, currentSong]);
+  }, [isPlaying, currentSong?.audioUrl]);
 
-  // --- MEDIA SESSION API (Notification Controls) ---
+  // --- MEDIA SESSION API (Notification & Lock Screen Controls) ---
   
-  // 1. Update Metadata
+  // 1. Update Metadata & Action Handlers
   useEffect(() => {
     if ('mediaSession' in navigator && currentSong) {
+      // Update metadata (Title, Artist, Artwork)
       navigator.mediaSession.metadata = new MediaMetadata({
         title: currentSong.title,
         artist: currentSong.artist,
@@ -196,28 +211,51 @@ const App: React.FC = () => {
         ]
       });
 
-      // Handlers need to be defined here to capture latest scope (though we rely on function references)
+      // Basic Controls
       navigator.mediaSession.setActionHandler('play', () => setIsPlaying(true));
       navigator.mediaSession.setActionHandler('pause', () => setIsPlaying(false));
+      navigator.mediaSession.setActionHandler('stop', () => {
+          setIsPlaying(false);
+          if (audioRef.current) {
+              audioRef.current.pause();
+              audioRef.current.currentTime = 0;
+          }
+      });
       navigator.mediaSession.setActionHandler('previoustrack', handlePrev);
       navigator.mediaSession.setActionHandler('nexttrack', handleNext);
+      
+      // Seeking Controls
       navigator.mediaSession.setActionHandler('seekto', (details) => {
           if (details.seekTime !== undefined && audioRef.current) {
               audioRef.current.currentTime = details.seekTime;
               setCurrentTime(details.seekTime);
           }
       });
+      navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+          const skipTime = details.seekOffset || 10;
+          if (audioRef.current) {
+              audioRef.current.currentTime = Math.max(audioRef.current.currentTime - skipTime, 0);
+              setCurrentTime(audioRef.current.currentTime);
+          }
+      });
+      navigator.mediaSession.setActionHandler('seekforward', (details) => {
+          const skipTime = details.seekOffset || 10;
+          if (audioRef.current) {
+              audioRef.current.currentTime = Math.min(audioRef.current.currentTime + skipTime, audioRef.current.duration || 0);
+              setCurrentTime(audioRef.current.currentTime);
+          }
+      });
     }
-  }, [currentSong]);
+  }, [currentSong]); // Re-attach when song changes
 
-  // 2. Update Playback State (Playing/Paused icon in notification)
+  // 2. Update Playback State
   useEffect(() => {
       if ('mediaSession' in navigator) {
           navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
       }
   }, [isPlaying]);
 
-  // 3. Update Position State (Progress Bar in notification)
+  // 3. Update Position State (Lock Screen Progress Bar)
   useEffect(() => {
       if ('mediaSession' in navigator && !isNaN(duration) && duration > 0 && !isNaN(currentTime)) {
           try {
@@ -227,7 +265,7 @@ const App: React.FC = () => {
                   position: currentTime
               });
           } catch (e) {
-              // Ignore timestamp errors
+              // Ignore invalid timestamp errors
           }
       }
   }, [currentTime, duration]);
@@ -270,16 +308,10 @@ const App: React.FC = () => {
         return;
     }
 
-    // Resolve URL if needed
-    let playableSong = { ...song };
-    if (!song.isLocal && !song.audioUrl) {
-         const url = await getStreamUrl(song.id);
-         playableSong.audioUrl = url;
-    }
-
-    setCurrentSong(playableSong);
+    // Set song immediately (useEffect will resolve URL)
+    setCurrentSong(song);
     setIsPlaying(true);
-    setPlayerMode('art'); // Reset view on new song
+    setPlayerMode('art'); 
   };
 
   const handleAddToQueue = (song: Song) => {
@@ -311,42 +343,17 @@ const App: React.FC = () => {
     setCurrentTime(time);
   };
 
-  // Define handleNext/Prev outside to be available for MediaSession
+  // Simplified Handlers for Next/Prev
   const handleNext = () => {
-    // We need to access the LATEST 'songs' and 'currentSong' state. 
-    // Since this is called by event listeners, we need to be careful with closures.
-    // However, in React 18, the ref-based or state-based approach inside effect dependencies works.
-    // For simplicity here, we rely on the component re-render updating the closures passed to MediaSession.
-    
-    // Note: To make this robust for MediaSession which might hold stale closures:
-    // In a production app, we would use refs for 'songs' and 'currentSong'.
-    // For now, this works because we update the action handlers every time 'currentSong' changes.
-    
-    // Calculate next index based on current state
-    // (Actual logic needs access to state, React handles this via re-attaching listeners in useEffect)
-    
     setSongs(prevSongs => {
         setCurrentSong(curr => {
             if (!curr || prevSongs.length === 0) return curr;
             const currentIndex = prevSongs.findIndex(s => s.id === curr.id);
             const safeIndex = currentIndex === -1 ? 0 : currentIndex;
             const nextIndex = (safeIndex + 1) % prevSongs.length;
-            const nextSong = prevSongs[nextIndex];
-            
-            // Trigger play
-            // We can't directly call handlePlaySong here easily without causing loops, 
-            // so we just set state and let the effect handle audio.src
-            
-            // Side-effect: Resolve URL if needed
-            if (!nextSong.isLocal && !nextSong.audioUrl) {
-                getStreamUrl(nextSong.id).then(url => {
-                     // This is a bit tricky, but for immediate UI update we just set what we have
-                     // and let the player effect update the src when it changes
-                });
-            }
-            return nextSong;
+            return prevSongs[nextIndex];
         });
-        return prevSongs; // Return same array
+        return prevSongs;
     });
     setIsPlaying(true);
   };
