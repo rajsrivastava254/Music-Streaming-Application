@@ -1,16 +1,15 @@
 
 export interface Song {
   id: string;
-  videoId?: string; // Specific for YouTube/Piped
   title: string;
   artist: string;
   album: string;
   coverUrl: string;
-  audioUrl: string;
-  previewUrl?: string; // Fallback from iTunes
+  audioUrl: string; // Direct full stream link
   duration: number; // in seconds
   isLocal?: boolean;
   lyrics?: string;
+  hasLyrics?: boolean;
 }
 
 export interface Playlist {

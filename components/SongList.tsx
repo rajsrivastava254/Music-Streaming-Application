@@ -1,6 +1,7 @@
+
 import React from 'react';
 import { Song } from '../types';
-import { Play, BarChart2, Download, MoreVertical, ListPlus } from 'lucide-react';
+import { Play, BarChart2, Download, MoreVertical, ListPlus, Mic2 } from 'lucide-react';
 
 interface SongListProps {
   songs: Song[];
@@ -53,7 +54,10 @@ const SongList: React.FC<SongListProps> = ({ songs, onPlay, currentSongId, isPla
                 )}
               </div>
               <div className="flex flex-col min-w-0 pr-2">
-                <h3 className={`font-medium truncate ${isCurrent ? 'text-green-400' : 'text-white'}`}>{song.title}</h3>
+                <div className="flex items-center gap-1">
+                    <h3 className={`font-medium truncate ${isCurrent ? 'text-green-400' : 'text-white'}`}>{song.title}</h3>
+                    {song.hasLyrics && <Mic2 size={10} className="text-gray-500" />}
+                </div>
                 <p className="text-sm text-gray-400 truncate">{song.artist}</p>
               </div>
             </div>
